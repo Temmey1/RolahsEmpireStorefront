@@ -30,6 +30,7 @@ export interface Location {
   name: string;
   landmark?: string;
   state: string;
+  lga?: string;
   fee: number;
   active: boolean;
 }
@@ -49,8 +50,10 @@ export interface Order {
   status: 'PENDING' | 'CONFIRMED' | 'PROCESSING' | 'DELIVERED' | 'CANCELLED';
   checkedItems: string[];
   note?: string;
+  publicToken?: string;
   items: OrderItem[];
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface OrderItem {

@@ -15,6 +15,9 @@ export const locationsApi = {
 
 export const ordersApi = {
   create: (data: any) => api.post('/orders', data).then(r => r.data),
+  // Public order view — no auth needed, uses token
+  getByToken: (token: string) => api.get(`/orders/public/${token}`).then(r => r.data),
+  updateByToken: (token: string, data: any) => api.put(`/orders/public/${token}`, data).then(r => r.data),
 };
 
 export const settingsApi = {
