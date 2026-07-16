@@ -11,15 +11,15 @@ export function categoryEmoji(category: string): string {
 }
 
 export const CATEGORIES = [
-  { value: 'all',         label: 'All',         emoji: '🛍️' },
-  { value: 'clothes',     label: 'Clothes',     emoji: '👔' },
-  { value: 'sneakers',    label: 'Sneakers',    emoji: '👟' },
-  { value: 'shoes',       label: 'Shoes',       emoji: '👞' },
-  { value: 'slides',      label: 'Slides',      emoji: '🩴' },
-  { value: 'watches',     label: 'Watches',     emoji: '⌚' },
-  { value: 'belts',       label: 'Belts',       emoji: '🪢' },
-  { value: 'caps',        label: 'Caps',        emoji: '🧢' },
-  { value: 'accessories', label: 'Accessories', emoji: '💍' },
+  { value: 'all',         label: 'All',         icon: 'Grid' },
+  { value: 'clothes',     label: 'Clothes',     icon: 'Shirt' },
+  { value: 'sneakers',    label: 'Sneakers',    icon: 'Footprints' },
+  { value: 'shoes',       label: 'Shoes',       icon: 'Link' },
+  { value: 'slides',      label: 'Slides',      icon: 'HardHat' },
+  { value: 'watches',     label: 'Watches',     icon: 'Watch' },
+  { value: 'belts',       label: 'Belts',       icon: 'Link' },
+  { value: 'caps',        label: 'Caps',        icon: 'HardHat' },
+  { value: 'accessories', label: 'Accessories', icon: 'Gem' },
 ];
 
 export const VENDOR_WHATSAPP = '2348105492564';
