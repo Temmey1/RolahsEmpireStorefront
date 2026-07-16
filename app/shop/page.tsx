@@ -148,6 +148,7 @@ export default function ShopPage() {
           <div className="flex gap-2 flex-wrap">
             {CATEGORIES.map((cat) => {
               const Icon = IconMap[cat.icon];
+              
               return (
                 <button
                   key={cat.value}
