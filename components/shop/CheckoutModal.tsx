@@ -1,12 +1,13 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, ChevronDown } from 'lucide-react';
+import { X } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useQuery } from '@tanstack/react-query';
 import { useCartStore, useCheckoutStore } from '@/store/cart';
-import { ordersApi, settingsApi } from '@/lib/api';
-import { formatPrice, buildWhatsAppMessage, VENDOR_WHATSAPP, STOREFRONT_URL } from '@/lib/utils';
-import { NIGERIA_LOCATIONS } from '@/lib/nigeriaLocations';
+import { locationsApi, ordersApi, settingsApi } from '@/lib/api';
+import { formatPrice, buildWhatsAppMessage, VENDOR_WHATSAPP } from '@/lib/utils';
+import { Location } from '@/types';
 
 export default function CheckoutModal({ onClose }: { onClose: () => void }) {
   const { items, total, clearCart } = useCartStore();
@@ -16,110 +17,87 @@ export default function CheckoutModal({ onClose }: { onClose: () => void }) {
     setField,
   } = useCheckoutStore();
 
-  const [loading, setLoading] = useState(false);
-  const [selectedState, setSelectedState] = useState('');
-  const [selectedLga, setSelectedLga]     = useState('');
-  const [selectedArea, setSelectedArea]   = useState('');
-  const [customFee, setCustomFee]         = useState<number | null>(null);
-  const [dbLocations, setDbLocations]     = useState<any[]>([]);
+  const { data: locations = [] } = useQuery<Location[]>({
+    queryKey: ['locations'],
+    queryFn: locationsApi.getAll,
+  });
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: settingsApi.getAll,
+  });
 
-  // Fetch settings for WhatsApp number override
-  const [waNumber, setWaNumber] = useState(VENDOR_WHATSAPP);
-  useEffect(() => {
-    settingsApi.getAll().then(s => { if (s?.whatsappNumber) setWaNumber(s.whatsappNumber); }).catch(() => {});
-    // Fetch any custom locations added by admin in DB
-    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api'}/locations`)
-      .then(r => r.json()).then(setDbLocations).catch(() => {});
-  }, []);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = ''; };
   }, []);
 
-  // Derived location data
-  const lgas = useMemo(() => {
-    if (!selectedState) return [];
-    return NIGERIA_LOCATIONS.find(s => s.state === selectedState)?.lgas || [];
-  }, [selectedState]);
-
-  const areas = useMemo(() => {
-    if (!selectedLga) return [];
-    return lgas.find(l => l.name === selectedLga)?.areas || [];
-  }, [lgas, selectedLga]);
-
-  const handleAreaChange = (areaName: string) => {
-    setSelectedArea(areaName);
-    const found = areas.find(a => a.area === areaName);
-    if (found) {
-      const label = `${areaName}, ${selectedLga}, ${selectedState}`;
-      setField('locationName', label);
-      setField('locationFee', found.defaultFee);
-      setField('locationId', '');
-      setCustomFee(null);
-    }
-  };
-
-  // DB custom location selected
-  const handleDbLocationChange = (id: string) => {
-    const loc = dbLocations.find(l => l.id === id);
-    if (loc) {
-      setField('locationId', id);
-      setField('locationName', `${loc.name}${loc.landmark ? ' (' + loc.landmark + ')' : ''}`);
-      setField('locationFee', loc.fee);
-      // Clear the state/lga/area pickers
-      setSelectedState(''); setSelectedLga(''); setSelectedArea('');
-    }
-  };
-
   const subtotal   = total();
-  const fee        = deliveryType === 'delivery' ? (locationFee || 0) : 0;
+  const fee        = deliveryType === 'delivery' ? locationFee : 0;
   const grandTotal = subtotal + fee;
+
+  const handleLocationChange = (id: string) => {
+    const loc = locations.find(l => l.id === id);
+    setField('locationId', id);
+    setField('locationName', loc?.name || '');
+    setField('locationFee', loc?.fee || 0);
+  };
 
   const placeOrder = async () => {
     if (!name.trim())  return toast.error('Please enter your name');
     if (!phone.trim()) return toast.error('Please enter your phone number');
     if (deliveryType === 'delivery' && !address.trim())
       return toast.error('Please enter your delivery address');
-    if (deliveryType === 'delivery' && !locationName)
-      return toast.error('Please select your delivery area');
 
     setLoading(true);
     try {
       const orderData = {
-        customerName: name.trim(),
-        customerPhone: phone.trim(),
-        customerEmail: email.trim() || undefined,
-        customerAddress: address.trim() || undefined,
+        customerName:    name.trim(),
+        customerPhone:   phone.trim(),
+        customerEmail:   email || undefined,
+        customerAddress: address || undefined,
         deliveryType,
-        locationId: locationId || undefined,
-        locationName: locationName || undefined,
-        locationFee: fee,
-        totalAmount: grandTotal,
-        note: note.trim() || undefined,
+        locationId:      locationId || undefined,
+        locationName:    locationName || undefined,
+        locationFee:     fee,
+        totalAmount:     grandTotal,
+        note:            note || undefined,
         items: items.map(i => ({
           productId: i.productId,
-          name: i.name,
-          price: i.price,
-          qty: i.qty,
-          size: i.size,
-          color: i.color,
-          image: i.image,
+          name:      i.name,
+          price:     i.price,
+          qty:       i.qty,
+          size:      i.size,
+          color:     i.color,
+          image:     i.image,
         })),
       };
 
+      // 1. Save order to backend — response includes publicToken
       const order = await ordersApi.create(orderData);
-      const publicUrl = order.publicToken
-        ? `${STOREFRONT_URL}/order/${order.publicToken}`
+
+      // 2. Build the public view URL from the token returned by backend
+      const storefrontBase =
+        process.env.NEXT_PUBLIC_STOREFRONT_URL ||
+        (typeof window !== 'undefined' ? window.location.origin : '');
+      const publicViewUrl = order.publicToken
+        ? `${storefrontBase}/order/${order.publicToken}`
         : undefined;
 
+      // 3. Use vendor WhatsApp from settings, fallback to hardcoded number
+      const waNum = settings?.whatsappNumber || VENDOR_WHATSAPP;
+
+      // 4. Build the WhatsApp message — now WITH the public link
       const msg = buildWhatsAppMessage({
         ...orderData,
-        orderNumber: order.orderNumber,
-        publicViewUrl: publicUrl,
+        orderNumber:  order.orderNumber,
+        publicViewUrl,             // ← this is what was missing before
       });
 
-      const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(msg)}`;
+      const waUrl = `https://wa.me/${waNum}?text=${encodeURIComponent(msg)}`;
+
+      // 5. Clear cart and close modal before opening WhatsApp
       clearCart();
       onClose();
       toast.success('Order placed! Opening WhatsApp...');
@@ -135,96 +113,106 @@ export default function CheckoutModal({ onClose }: { onClose: () => void }) {
     <AnimatePresence>
       <motion.div
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center"
-        style={{ background: 'rgba(0,0,0,0.75)', padding: '0' }}
+        className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+        style={{ background: 'rgba(0,0,0,0.75)' }}
         onClick={onClose}
       >
         <motion.div
-          initial={{ y: '100%', opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: '100%', opacity: 0 }}
-          transition={{ type: 'spring', damping: 28, stiffness: 280 }}
+          initial={{ scale: 0.94, opacity: 0, y: 20 }}
+          animate={{ scale: 1, opacity: 1, y: 0 }}
+          exit={{ scale: 0.94, opacity: 0 }}
+          transition={{ duration: 0.25 }}
           onClick={e => e.stopPropagation()}
-          className="w-full overflow-y-auto"
-          style={{
-            backgroundColor: 'var(--surface)',
-            borderRadius: '20px 20px 0 0',
-            maxHeight: '92vh',
-            maxWidth: '600px',
-            margin: '0 auto',
-          }}
+          className="w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-2xl"
+          style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--border)' }}
         >
-          {/* Mobile drag handle */}
-          <div className="flex justify-center pt-3 pb-1 sm:hidden">
-            <div className="w-10 h-1 rounded-full" style={{ backgroundColor: 'var(--border)' }} />
-          </div>
-
           {/* Header */}
           <div
-            className="sticky top-0 z-10 flex items-center justify-between px-5 py-4"
+            className="sticky top-0 z-10 flex items-center justify-between px-6 py-5"
             style={{ backgroundColor: 'var(--surface)', borderBottom: '1px solid var(--border)' }}
           >
-            <h2 className="font-display text-xl sm:text-2xl font-semibold text-theme">
+            <h2 className="font-display text-2xl font-semibold text-theme">
               Complete Your <span className="text-gold">Order</span>
             </h2>
             <button
               onClick={onClose}
-              className="w-8 h-8 rounded-full flex items-center justify-center text-theme-2"
-              style={{ backgroundColor: 'var(--bg3)' }}
+              className="w-8 h-8 rounded-full flex items-center justify-center bg-theme-3 text-theme-2 hover:text-theme transition-colors"
             >
               <X size={16} />
             </button>
           </div>
 
-          <div className="px-5 py-5 flex flex-col gap-5 pb-safe">
+          <div className="px-6 py-6 flex flex-col gap-6">
 
             {/* Order Summary */}
-            <div className="rounded-xl p-4" style={{ backgroundColor: 'var(--bg2)' }}>
-              <p className="text-[0.65rem] tracking-[0.2em] uppercase text-gold mb-3">Order Summary</p>
-              <div className="flex flex-col gap-2">
-                {items.map(item => {
-                  const meta = [item.size && `${item.size}`, item.color && `${item.color}`].filter(Boolean).join(' · ');
-                  return (
-                    <div key={item.id} className="flex justify-between items-start gap-2 text-sm">
-                      <span className="text-theme-2 flex-1 min-w-0">
-                        <span className="font-medium text-theme">{item.name}</span>
-                        {meta && <span className="text-theme-3 text-xs"> ({meta})</span>}
-                        <span className="text-theme-3"> ×{item.qty}</span>
-                      </span>
-                      <span className="font-semibold text-theme flex-shrink-0">{formatPrice(item.price * item.qty)}</span>
-                    </div>
-                  );
-                })}
-              </div>
+            <div className="rounded-xl p-4 flex flex-col gap-2" style={{ backgroundColor: 'var(--bg2)' }}>
+              <p className="text-[0.68rem] tracking-[0.2em] uppercase text-gold mb-1">Order Summary</p>
+              {items.map(item => {
+                const meta = [
+                  item.size  && `Size: ${item.size}`,
+                  item.color && `Color: ${item.color}`,
+                ].filter(Boolean).join(' · ');
+                return (
+                  <div
+                    key={item.id}
+                    className="flex justify-between text-sm py-1"
+                    style={{ borderBottom: '1px solid var(--border)' }}
+                  >
+                    <span className="text-theme-2">
+                      {item.name}{meta ? ` (${meta})` : ''} ×{item.qty}
+                    </span>
+                    <span className="font-semibold text-theme">
+                      {formatPrice(item.price * item.qty)}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Customer Details */}
             <div>
-              <p className="text-[0.65rem] tracking-[0.2em] uppercase text-gold mb-3">Your Details</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Field label="Full Name *">
-                  <input value={name} onChange={e => setField('name', e.target.value)} placeholder="Enter your name" />
-                </Field>
-                <Field label="Phone Number *">
-                  <input value={phone} onChange={e => setField('phone', e.target.value)} placeholder="08012345678" type="tel" inputMode="tel" />
-                </Field>
-                <div className="sm:col-span-2">
-                  <Field label="Email Address">
-                    <input value={email} onChange={e => setField('email', e.target.value)} placeholder="you@email.com" type="email" inputMode="email" />
-                  </Field>
+              <p className="text-[0.68rem] tracking-[0.2em] uppercase text-gold mb-3">Your Details</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-theme-2">Full Name *</label>
+                  <input
+                    value={name}
+                    onChange={e => setField('name', e.target.value)}
+                    placeholder="Enter your name"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-theme-2">Phone Number *</label>
+                  <input
+                    value={phone}
+                    onChange={e => setField('phone', e.target.value)}
+                    placeholder="08012345678"
+                    type="tel"
+                    inputMode="tel"
+                  />
+                </div>
+                <div className="col-span-2 flex flex-col gap-1.5">
+                  <label className="text-xs text-theme-2">Email Address</label>
+                  <input
+                    value={email}
+                    onChange={e => setField('email', e.target.value)}
+                    placeholder="you@email.com"
+                    type="email"
+                    inputMode="email"
+                  />
                 </div>
               </div>
             </div>
 
             {/* Delivery Toggle */}
             <div>
-              <p className="text-[0.65rem] tracking-[0.2em] uppercase text-gold mb-3">Delivery Method</p>
-              <div className="grid grid-cols-2 rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+              <p className="text-[0.68rem] tracking-[0.2em] uppercase text-gold mb-3">Delivery Method</p>
+              <div className="flex rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
                 {(['delivery', 'pickup'] as const).map(type => (
                   <button
                     key={type}
                     onClick={() => setField('deliveryType', type)}
-                    className="py-3 sm:py-3.5 text-sm font-semibold transition-all"
+                    className="flex-1 py-3 text-sm font-semibold transition-all capitalize"
                     style={{
                       backgroundColor: deliveryType === type ? '#C9A84C' : 'transparent',
                       color: deliveryType === type ? '#000' : 'var(--text2)',
@@ -236,157 +224,99 @@ export default function CheckoutModal({ onClose }: { onClose: () => void }) {
               </div>
             </div>
 
-            {/* Delivery Address + Location */}
+            {/* Delivery fields */}
             {deliveryType === 'delivery' && (
               <div className="flex flex-col gap-3">
-                <Field label="Delivery Address *">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-theme-2">Delivery Address *</label>
                   <textarea
                     value={address}
                     onChange={e => setField('address', e.target.value)}
-                    placeholder="Enter your full delivery address (house number, street, area)"
+                    placeholder="Enter your full delivery address"
                     rows={2}
                     className="resize-none"
                   />
-                </Field>
-
-                {/* State → LGA → Area cascade */}
-                <p className="text-[0.65rem] tracking-[0.2em] uppercase text-gold">Select Delivery Area</p>
-
-                {/* DB custom locations if any */}
-                {dbLocations.length > 0 && (
-                  <Field label="Custom zones (admin-added)">
-                    <div className="relative">
-                      <select
-                        value={locationId}
-                        onChange={e => handleDbLocationChange(e.target.value)}
-                        style={{ paddingRight: '2.5rem' }}
-                      >
-                        <option value="">-- Admin custom zones --</option>
-                        {dbLocations.map(l => (
-                          <option key={l.id} value={l.id}>
-                            {l.name}{l.landmark ? ` (${l.landmark})` : ''} — {formatPrice(l.fee)}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-3 pointer-events-none" />
-                    </div>
-                  </Field>
-                )}
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <Field label="State">
-                    <div className="relative">
-                      <select
-                        value={selectedState}
-                        onChange={e => { setSelectedState(e.target.value); setSelectedLga(''); setSelectedArea(''); setField('locationName', ''); setField('locationFee', 0); }}
-                        style={{ paddingRight: '2.5rem' }}
-                      >
-                        <option value="">Select state</option>
-                        {NIGERIA_LOCATIONS.map(s => (
-                          <option key={s.state} value={s.state}>{s.state}</option>
-                        ))}
-                      </select>
-                      <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-3 pointer-events-none" />
-                    </div>
-                  </Field>
-
-                  <Field label="LGA / District">
-                    <div className="relative">
-                      <select
-                        value={selectedLga}
-                        onChange={e => { setSelectedLga(e.target.value); setSelectedArea(''); setField('locationName', ''); setField('locationFee', 0); }}
-                        disabled={!selectedState}
-                        style={{ paddingRight: '2.5rem', opacity: !selectedState ? 0.5 : 1 }}
-                      >
-                        <option value="">Select LGA</option>
-                        {lgas.map(l => <option key={l.name} value={l.name}>{l.name}</option>)}
-                      </select>
-                      <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-3 pointer-events-none" />
-                    </div>
-                  </Field>
-
-                  <Field label="Area">
-                    <div className="relative">
-                      <select
-                        value={selectedArea}
-                        onChange={e => handleAreaChange(e.target.value)}
-                        disabled={!selectedLga}
-                        style={{ paddingRight: '2.5rem', opacity: !selectedLga ? 0.5 : 1 }}
-                      >
-                        <option value="">Select area</option>
-                        {areas.map(a => (
-                          <option key={a.area} value={a.area}>{a.area} — {formatPrice(a.defaultFee)}</option>
-                        ))}
-                      </select>
-                      <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-3 pointer-events-none" />
-                    </div>
-                  </Field>
                 </div>
-
-                {locationName && (
-                  <div className="flex items-center justify-between rounded-lg px-3 py-2.5 text-sm"
-                    style={{ backgroundColor: 'rgba(201,168,76,0.08)', border: '1px solid rgba(201,168,76,0.2)' }}>
-                    <span className="text-theme-2">📍 {locationName}</span>
-                    <span className="text-gold font-bold">{formatPrice(fee)}</span>
-                  </div>
-                )}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-theme-2">Select Your Area</label>
+                  <select
+                    value={locationId}
+                    onChange={e => handleLocationChange(e.target.value)}
+                  >
+                    <option value="">-- Select delivery area --</option>
+                    {locations.map(l => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}{l.landmark ? ` (${l.landmark})` : ''} — {formatPrice(l.fee)}
+                      </option>
+                    ))}
+                  </select>
+                  {locationFee > 0 && (
+                    <p className="text-xs text-gold">📍 Delivery fee: {formatPrice(locationFee)}</p>
+                  )}
+                </div>
               </div>
             )}
 
             {/* Note */}
-            <Field label="Message / Special Instructions">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs text-theme-2">Message / Special Instructions</label>
               <textarea
                 value={note}
                 onChange={e => setField('note', e.target.value)}
-                placeholder="Any special requests, colour preference, size notes..."
+                placeholder="Any special requests or notes..."
                 rows={2}
                 className="resize-none"
               />
-            </Field>
+            </div>
 
             {/* Totals */}
-            <div className="rounded-xl p-4 flex flex-col gap-2.5" style={{ backgroundColor: 'var(--bg2)' }}>
+            <div className="rounded-xl p-4 flex flex-col gap-2" style={{ backgroundColor: 'var(--bg2)' }}>
               <div className="flex justify-between text-sm">
                 <span className="text-theme-2">Subtotal</span>
-                <span className="text-theme font-medium">{formatPrice(subtotal)}</span>
+                <span className="text-gold font-semibold">{formatPrice(subtotal)}</span>
               </div>
               {fee > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-theme-2">Delivery Fee</span>
-                  <span className="text-theme font-medium">{formatPrice(fee)}</span>
+                  <span className="text-theme-2">Delivery ({locationName})</span>
+                  <span className="text-gold font-semibold">{formatPrice(fee)}</span>
                 </div>
               )}
-              <div className="flex justify-between pt-2 font-bold" style={{ borderTop: '1px solid var(--border)' }}>
+              <div
+                className="flex justify-between pt-2 font-bold"
+                style={{ borderTop: '1px solid var(--border)' }}
+              >
                 <span className="text-theme">Total</span>
                 <span className="text-gold text-lg">{formatPrice(grandTotal)}</span>
               </div>
             </div>
 
-            {/* Submit */}
+            {/* Info note about public link */}
+            <div
+              className="rounded-xl px-4 py-3 text-xs"
+              style={{ backgroundColor: 'rgba(201,168,76,0.08)', border: '1px solid rgba(201,168,76,0.2)' }}
+            >
+              <p className="text-gold font-semibold mb-0.5">🔗 Public Order Link</p>
+              <p className="text-theme-2">
+                After placing your order, a unique link will be included in the WhatsApp message.
+                You and the vendor can use it to view and track the order at any time.
+              </p>
+            </div>
+
+            {/* CTA */}
             <button
               onClick={placeOrder}
               disabled={loading}
-              className="btn-gold w-full disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ padding: '1rem', borderRadius: '12px', fontSize: '0.9rem' }}
+              className="btn-gold w-full justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ padding: '1rem', borderRadius: '0.75rem' }}
             >
               {loading ? '⏳ Placing Order...' : '💬 Send Order via WhatsApp'}
             </button>
-            <p className="text-xs text-theme-3 text-center -mt-2 pb-2">
-              Your order details will be sent to us on WhatsApp for confirmation and payment.
-              You'll also receive a public link to view and edit your order.
+            <p className="text-xs text-theme-3 text-center -mt-2">
+              Your order will be sent directly to WhatsApp for confirmation and payment.
             </p>
           </div>
         </motion.div>
       </motion.div>
     </AnimatePresence>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label className="text-xs text-theme-2 font-medium">{label}</label>
-      {children}
-    </div>
   );
 }
