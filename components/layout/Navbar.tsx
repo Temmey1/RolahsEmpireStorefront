@@ -52,9 +52,12 @@ export default function Navbar() {
       >
         <div className="max-w-8xl mx-auto px-6 sm:px-8 lg:px-12 h-[70px] flex items-center justify-between">
           {/* Logo */}
-          <Link href="/" className="flex flex-col leading-none">
-            <span className="font-bebas text-[1.4rem] tracking-[0.12em] text-gold">ROLAHS</span>
-            <span className="text-[0.52rem] tracking-[0.35em] text-theme-2 uppercase font-light" style={{ marginTop: '-2px' }}>EMPIRE</span>
+          <Link href="/" className="flex items-center gap-2.5">
+            <img src="/logo.png" alt="ROLAHS EMPIRE" className="w-8 h-8 rounded-md object-cover flex-shrink-0" />
+            <div className="flex flex-col leading-none">
+              <span className="font-bebas text-[1.4rem] tracking-[0.12em] text-gold">ROLAHS</span>
+              <span className="text-[0.52rem] tracking-[0.35em] text-theme-2 uppercase font-light" style={{ marginTop: '-2px' }}>EMPIRE</span>
+            </div>
           </Link>
 
           {/* Desktop links */}

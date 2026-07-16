@@ -5,10 +5,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   CheckCircle2, Clock, Package, Truck, XCircle,
   Edit3, Save, X, MessageCircle, ShoppingBag, MapPin,
+  Plus, Minus, Trash2, Search,
 } from 'lucide-react';
-import { ordersApi } from '@/lib/api';
+import { ordersApi, productsApi } from '@/lib/api';
 import { formatPrice, buildWhatsAppMessage, VENDOR_WHATSAPP } from '@/lib/utils';
-import { Order } from '@/types';
+import { Order, OrderItem, Product } from '@/types';
 
 const STATUS_CONFIG = {
   PENDING:    { label: 'Order Received',  icon: Clock,         color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
@@ -36,6 +37,13 @@ export default function PublicOrderPage() {
   const [editEmail, setEditEmail]     = useState('');
   const [editAddress, setEditAddress] = useState('');
   const [editNote, setEditNote]       = useState('');
+
+  // Item editing
+  const [editingItems, setEditingItems] = useState(false);
+  const [draftItems, setDraftItems]     = useState<OrderItem[]>([]);
+  const [savingItems, setSavingItems]   = useState(false);
+  const [productSearch, setProductSearch] = useState('');
+  const [products, setProducts]         = useState<Product[]>([]);
 
   useEffect(() => {
     if (!token) return;
@@ -71,6 +79,63 @@ export default function PublicOrderPage() {
       setSaving(false);
     }
   };
+
+  const startEditingItems = () => {
+    if (!order) return;
+    setDraftItems(order.items.map(i => ({ ...i })));
+    setEditingItems(true);
+    if (!products.length) {
+      productsApi.getAll({ limit: 200 }).then(res => setProducts(res.data || [])).catch(() => {});
+    }
+  };
+
+  const updateDraftQty = (idx: number, qty: number) => {
+    if (qty < 1) return;
+    setDraftItems(items => items.map((it, i) => (i === idx ? { ...it, qty } : it)));
+  };
+
+  const removeDraftItem = (idx: number) => {
+    setDraftItems(items => items.filter((_, i) => i !== idx));
+  };
+
+  const addDraftProduct = (p: Product) => {
+    setDraftItems(items => [
+      ...items,
+      { id: `new-${p.id}-${Date.now()}`, productId: p.id, name: p.name, price: p.price, qty: 1, image: p.images?.[0] },
+    ]);
+    setProductSearch('');
+  };
+
+  const saveItems = async () => {
+    if (!order) return;
+    if (!draftItems.length) { alert('Your order must contain at least one item.'); return; }
+    setSavingItems(true);
+    try {
+      const updated = await ordersApi.updateByToken(token, {
+        items: draftItems.map(i => ({
+          productId: i.productId,
+          name: i.name,
+          price: i.price,
+          qty: i.qty,
+          size: i.size,
+          color: i.color,
+          image: i.image,
+        })),
+      });
+      setOrder(updated);
+      setEditingItems(false);
+    } catch {
+      alert('Failed to update items. Please try again.');
+    } finally {
+      setSavingItems(false);
+    }
+  };
+
+  const filteredProducts = products
+    .filter(p => productSearch.length > 0 && p.name.toLowerCase().includes(productSearch.toLowerCase()))
+    .slice(0, 6);
+
+  const draftSubtotal = draftItems.reduce((s, i) => s + i.price * i.qty, 0);
 
   const openWhatsApp = () => {
     if (!order) return;
@@ -122,6 +187,7 @@ export default function PublicOrderPage() {
       {/* Hero header */}
       <div style={{ background: 'linear-gradient(135deg, #090909, #0f0900)', borderBottom: '1px solid var(--border)' }}>
         <div className="max-w-2xl mx-auto px-4 py-8 text-center">
+          <img src="/logo.png" alt="ROLAHS EMPIRE" className="w-12 h-12 rounded-lg object-cover mx-auto mb-2" />
           <div className="font-bebas text-2xl tracking-[0.15em] text-gold mb-1">ROLAHS EMPIRE</div>
           <div className="text-[0.5rem] tracking-[0.3em] uppercase mb-6" style={{ color: 'var(--text3)' }}>ORDER DETAILS</div>
           <h1 className="font-display text-3xl sm:text-4xl font-light text-theme mb-1">
@@ -194,32 +260,104 @@ export default function PublicOrderPage() {
 
         {/* Order items */}
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
-          <div className="px-5 py-3.5 flex items-center gap-2" style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg2)' }}>
-            <ShoppingBag size={15} className="text-gold" />
-            <h3 className="font-semibold text-sm text-theme">Order Items</h3>
+          <div className="px-5 py-3.5 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg2)' }}>
+            <div className="flex items-center gap-2">
+              <ShoppingBag size={15} className="text-gold" />
+              <h3 className="font-semibold text-sm text-theme">Order Items</h3>
+            </div>
+            {order.status === 'PENDING' && !editingItems && (
+              <button onClick={startEditingItems} className="flex items-center gap-1.5 text-xs text-gold hover:text-gold-light transition-colors">
+                <Edit3 size={13} /> Edit Items
+              </button>
+            )}
           </div>
-          <div className="divide-y" style={{ backgroundColor: 'var(--surface)' }}>
-            {order.items.map((item, i) => {
-              const meta = [item.size && `Size: ${item.size}`, item.color && `Color: ${item.color}`].filter(Boolean).join(' · ');
-              return (
-                <div key={item.id || i} className="flex items-center gap-3 px-5 py-4">
+
+          {editingItems ? (
+            <div className="p-5 flex flex-col gap-3" style={{ backgroundColor: 'var(--surface)' }}>
+              {draftItems.map((item, idx) => (
+                <div key={item.id} className="flex items-center gap-3 text-sm py-2" style={{ borderBottom: '1px solid var(--border)' }}>
                   {item.image ? (
-                    <img src={item.image} alt={item.name} className="w-12 h-12 rounded-lg object-cover flex-shrink-0" />
+                    <img src={item.image} alt={item.name} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />
                   ) : (
-                    <div className="w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: 'var(--bg3)' }}>
-                      <Package size={18} className="text-theme-3" />
+                    <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: 'var(--bg3)' }}>
+                      <Package size={14} className="text-theme-3" />
                     </div>
                   )}
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-theme truncate">{item.name}</p>
-                    {meta && <p className="text-xs text-theme-3 mt-0.5">{meta}</p>}
-                    <p className="text-xs text-theme-2 mt-0.5">Qty: {item.qty}</p>
+                    <p className="text-theme truncate">{item.name}</p>
+                    {(item.size || item.color) && (
+                      <p className="text-xs text-theme-3">{[item.size && `Size: ${item.size}`, item.color && `Color: ${item.color}`].filter(Boolean).join(' · ')}</p>
+                    )}
+                    <p className="text-xs text-theme-3">{formatPrice(item.price)} each</p>
                   </div>
-                  <p className="text-sm font-bold text-gold flex-shrink-0">{formatPrice(item.price * item.qty)}</p>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button onClick={() => updateDraftQty(idx, item.qty - 1)} className="w-6 h-6 rounded flex items-center justify-center text-theme-2" style={{ backgroundColor: 'var(--bg3)' }}><Minus size={12} /></button>
+                    <span className="w-6 text-center text-theme">{item.qty}</span>
+                    <button onClick={() => updateDraftQty(idx, item.qty + 1)} className="w-6 h-6 rounded flex items-center justify-center text-theme-2" style={{ backgroundColor: 'var(--bg3)' }}><Plus size={12} /></button>
+                  </div>
+                  <span className="font-bold text-gold w-20 text-right flex-shrink-0">{formatPrice(item.price * item.qty)}</span>
+                  <button onClick={() => removeDraftItem(idx)} className="text-theme-3 hover:text-red-400 flex-shrink-0"><Trash2 size={14} /></button>
                 </div>
-              );
-            })}
-          </div>
+              ))}
+
+              {/* Add product */}
+              <div className="relative">
+                <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ backgroundColor: 'var(--bg3)' }}>
+                  <Search size={13} className="text-theme-3" />
+                  <input value={productSearch} onChange={e => setProductSearch(e.target.value)} placeholder="Search products to add..."
+                    className="bg-transparent border-0 outline-none text-sm text-theme flex-1 p-0" />
+                </div>
+                {filteredProducts.length > 0 && (
+                  <div className="absolute z-20 mt-1 w-full rounded-lg overflow-hidden shadow-lg max-h-56 overflow-y-auto" style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--border)' }}>
+                    {filteredProducts.map(p => (
+                      <button key={p.id} onClick={() => addDraftProduct(p)} className="w-full flex items-center gap-3 px-3 py-2 text-left transition-all hover:opacity-80">
+                        {p.images?.[0] ? <img src={p.images[0]} className="w-8 h-8 rounded object-cover flex-shrink-0" /> : <div className="w-8 h-8 rounded flex-shrink-0" style={{ backgroundColor: 'var(--bg3)' }} />}
+                        <span className="flex-1 text-sm text-theme truncate">{p.name}</span>
+                        <span className="text-xs text-gold">{formatPrice(p.price)}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-between text-sm font-bold pt-2" style={{ borderTop: '1px solid var(--border)' }}>
+                <span className="text-theme">New Subtotal</span>
+                <span className="text-gold">{formatPrice(draftSubtotal)}</span>
+              </div>
+
+              <div className="flex gap-2 mt-1">
+                <button onClick={saveItems} disabled={savingItems} className="btn-gold flex-1 disabled:opacity-50" style={{ padding: '0.65rem', fontSize: '0.8rem' }}>
+                  <Save size={14} /> {savingItems ? 'Saving...' : 'Save Items'}
+                </button>
+                <button onClick={() => setEditingItems(false)} className="btn-outline flex-1" style={{ padding: '0.65rem', fontSize: '0.8rem' }}>
+                  <X size={14} /> Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="divide-y" style={{ backgroundColor: 'var(--surface)' }}>
+              {order.items.map((item, i) => {
+                const meta = [item.size && `Size: ${item.size}`, item.color && `Color: ${item.color}`].filter(Boolean).join(' · ');
+                return (
+                  <div key={item.id || i} className="flex items-center gap-3 px-5 py-4">
+                    {item.image ? (
+                      <img src={item.image} alt={item.name} className="w-12 h-12 rounded-lg object-cover flex-shrink-0" />
+                    ) : (
+                      <div className="w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: 'var(--bg3)' }}>
+                        <Package size={18} className="text-theme-3" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-theme truncate">{item.name}</p>
+                      {meta && <p className="text-xs text-theme-3 mt-0.5">{meta}</p>}
+                      <p className="text-xs text-theme-2 mt-0.5">Qty: {item.qty}</p>
+                    </div>
+                    <p className="text-sm font-bold text-gold flex-shrink-0">{formatPrice(item.price * item.qty)}</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Invoice totals */}
           <div className="px-5 py-4 flex flex-col gap-2" style={{ backgroundColor: 'var(--bg2)', borderTop: '1px solid var(--border)' }}>
